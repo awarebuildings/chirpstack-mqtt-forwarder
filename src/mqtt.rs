@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
@@ -10,11 +11,12 @@ use rumqttc::v5::mqttbytes::v5::{ConnectReturnCode, LastWill, Publish};
 use rumqttc::v5::{mqttbytes::QoS, AsyncClient, Event, Incoming, MqttOptions};
 use rumqttc::Transport;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, OnceCell};
 use tokio::time::sleep;
 
 use crate::backend::{
-    get_gateway_id, send_configuration_command, send_downlink_frame, send_mesh_command,
+    filters, get_gateway_id, send_configuration_command, send_downlink_frame, send_mesh_command,
 };
 use crate::commands;
 use crate::config::Configuration;
@@ -27,6 +29,21 @@ struct State {
     json: bool,
     gateway_id: String,
     topic_prefix: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct FiltersCommand {
+    pub flush_filters: bool,
+    pub return_filters: bool,
+    pub set: HashMap<String, Vec<String>>,
+    pub set_dev_euis: HashMap<String, Vec<String>>,
+    pub remove_dev_euis: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct FiltersEvent {
+    pub dev_euis: HashMap<String, Vec<String>>,
 }
 
 pub async fn setup(conf: &Configuration) -> Result<()> {
@@ -332,6 +349,19 @@ pub async fn send_tx_ack(pl: &gw::DownlinkTxAck) -> Result<()> {
     Ok(())
 }
 
+async fn send_filters(pl: &FiltersEvent) -> Result<()> {
+    let state = STATE.get().ok_or_else(|| anyhow!("STATE is not set"))?;
+
+    let b = serde_json::to_vec(pl)?;
+    let topic = get_event_topic(&state.topic_prefix, &state.gateway_id, "filters");
+
+    info!("Sending filters event, topic: {}", topic);
+    state.client.publish(topic, state.qos, false, b).await?;
+    trace!("Message published");
+
+    Ok(())
+}
+
 async fn message_callback(p: Publish) -> Result<()> {
     let state = STATE.get().ok_or_else(|| anyhow!("STATE is not set"))?;
 
@@ -412,6 +442,11 @@ async fn message_callback(p: Publish) -> Result<()> {
             info!("Received mesh command, topic: {}", topic);
             send_mesh_command(pl).await
         }
+        "filters" => {
+            let pl: FiltersCommand = serde_json::from_slice(&b)?;
+            info!("Received filters command, topic: {}", topic);
+            handle_filters_command(&pl).await
+        }
         _ => Err(anyhow!("Unexpected command, command: {}", command)),
     }
 }
@@ -443,6 +478,82 @@ async fn handle_command_exec(pl: &gw::GatewayCommandExecRequest) -> Result<()> {
     state.client.publish(topic, state.qos, false, b).await?;
 
     trace!("Message published");
+
+    Ok(())
+}
+
+async fn handle_filters_command(pl: &FiltersCommand) -> Result<()> {
+    if pl.flush_filters {
+        info!("Flushing filters");
+        filters::flush().await;
+    }
+
+    if !pl.set.is_empty() {
+        let mut f: HashMap<[u8; 8], HashSet<[u8; 4]>> = HashMap::new();
+
+        for (dev_eui_str, dev_addrs_str) in &pl.set {
+            info!(
+                "Parsing DevEUI and DevAdrs, dev_eui: {}, dev_addrs: {:?}",
+                dev_eui_str, dev_addrs_str
+            );
+
+            let mut dev_eui: [u8; 8] = [0; 8];
+            let mut dev_addrs: HashSet<[u8; 4]> = HashSet::new();
+
+            hex::decode_to_slice(dev_eui_str, &mut dev_eui)?;
+            for dev_addr_str in dev_addrs_str {
+                let mut dev_addr: [u8; 4] = [0; 4];
+                hex::decode_to_slice(dev_addr_str, &mut dev_addr)?;
+                dev_addrs.insert(dev_addr);
+            }
+
+            f.insert(dev_eui, dev_addrs);
+        }
+
+        filters::set(f).await;
+    }
+
+    for dev_eui in &pl.remove_dev_euis {
+        info!("Removing DevEUI from filters, dev_eui: {}", dev_eui);
+
+        let mut dev_eui: [u8; 8] = [0; 8];
+        hex::decode_to_slice(dev_eui, &mut dev_eui)?;
+
+        filters::remove_dev_eui(dev_eui).await;
+    }
+
+    for (dev_eui_str, dev_addrs_str) in &pl.set_dev_euis {
+        info!(
+            "Setting DevEUI to DevAddrs, dev_eui: {}, dev_addrs: {:?}",
+            dev_eui_str, dev_addrs_str
+        );
+
+        let mut dev_eui: [u8; 8] = [0; 8];
+        let mut dev_addrs: HashSet<[u8; 4]> = HashSet::new();
+
+        hex::decode_to_slice(dev_eui_str, &mut dev_eui)?;
+        for dev_addr_str in dev_addrs_str {
+            let mut dev_addr: [u8; 4] = [0; 4];
+            hex::decode_to_slice(dev_addr_str, &mut dev_addr)?;
+            dev_addrs.insert(dev_addr);
+        }
+
+        filters::set_dev_eui(dev_eui, dev_addrs).await;
+    }
+
+    if pl.return_filters {
+        let mut out = FiltersEvent::default();
+        let f = filters::get().await;
+
+        for (dev_eui, dev_addrs) in &f {
+            out.dev_euis.insert(
+                hex::encode(dev_eui),
+                dev_addrs.iter().map(hex::encode).collect(),
+            );
+        }
+
+        send_filters(&out).await?;
+    }
 
     Ok(())
 }

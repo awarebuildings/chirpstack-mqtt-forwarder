@@ -12,6 +12,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::{Mutex, RwLock};
 
 use super::Backend as BackendTrait;
+use crate::backend::filters;
 use crate::config::Configuration;
 use crate::metadata;
 use crate::mqtt::{send_gateway_stats, send_tx_ack, send_uplink_frame};
@@ -376,7 +377,9 @@ async fn handle_push_data(state: &Arc<State>, data: &[u8], remote: &SocketAddr) 
             }
         }
 
-        if lrwn_filters::matches(&uf.phy_payload, &state.filters) {
+        if filters::matches(&uf.phy_payload).await
+            && lrwn_filters::matches(&uf.phy_payload, &state.filters)
+        {
             state.count_uplink(uf).await?;
             send_uplink_frame(uf).await?;
         } else {

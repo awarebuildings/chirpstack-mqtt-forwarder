@@ -11,6 +11,7 @@ use crate::config::Configuration;
 
 #[cfg(feature = "concentratord")]
 pub mod concentratord;
+pub mod filters;
 #[cfg(feature = "semtech_udp")]
 pub mod semtech_udp;
 
@@ -25,6 +26,8 @@ pub trait Backend {
 }
 
 pub async fn setup(conf: &Configuration) -> Result<()> {
+    filters::setup().await?;
+
     match conf.backend.enabled.as_ref() {
         #[cfg(feature = "semtech_udp")]
         "semtech_udp" => {

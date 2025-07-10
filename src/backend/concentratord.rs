@@ -9,6 +9,7 @@ use log::{debug, error, info, trace, warn};
 use tokio::task;
 
 use super::Backend as BackendTrait;
+use crate::backend::filters as backend_filters;
 use crate::config::Configuration;
 use crate::metadata;
 use crate::mqtt::{send_gateway_stats, send_mesh_event, send_tx_ack, send_uplink_frame};
@@ -288,7 +289,9 @@ async fn handle_event_msg(
                 }
             }
 
-            if lrwn_filters::matches(&v.phy_payload, filters) {
+            if backend_filters::matches(&v.phy_payload).await
+                && lrwn_filters::matches(&v.phy_payload, filters)
+            {
                 info!(
                     "Received uplink frame, uplink_id: {}",
                     v.rx_info.as_ref().map(|v| v.uplink_id).unwrap_or_default(),
