@@ -90,6 +90,71 @@ make build
 make dist
 ```
 
+## Dynamic filter configuration
+
+The ChirpStack MQTT Forwarder by default can be configured with DevAddr and
+JoinEUI prefix filters for filtering uplink data.
+
+This fork contains modifications to also support dynamic filters that can
+be configured by sending JSON configuration payloads over MQTT to the
+`[region]/gateway/[gateway_id]/command/filters` topic. In case a response
+is requested, the response is published to `[region/gateway]/[gateway_id]/event/filters`.
+
+### Command
+
+The command payload format is:
+
+```json
+{
+  "flush_filters": true,
+  "set": {
+    "0101010101010101": ["01010101", "02020202"]
+  },
+  "set_dev_euis": {
+    "0101010101010101": ["01010101", "02020202"]
+  },
+  "remove_dev_euis": ["0101010101010101"],
+  "return_filters": true
+}
+```
+
+It is not required to provide all fields. Actions are performed in the
+following order (if provided):
+
+* `flush_filters`
+* `set`
+* `remove_dev_euis`
+* `set_dev_euis`
+* `return_filters`
+
+#### `flush_filters`
+
+This will flush all existing filters (before other actions are executed).
+
+#### `set`
+
+This will set the filterlist to exactly the filterlist provided in the
+`set` command. This is effectively the same as `flush_filters` + `set_dev_euis`
+with the exception that in case `set` is used, the filterlist will only be
+overwritten once the full `set` payload has been parsed. In case of using
+`flush_filters` + `set_dev_euis` the filters will first be flushed, after which
+the `set_dev_euis` payload is decoded.
+
+#### `remove_dev_euis`
+
+This removes the DevEUI entries from the filterlist.
+
+#### `set_dev_euis`
+
+This adds (or overwrites) the given DevEUI entries to the list + the list of
+DevAddrs that are associated with the DevEUI. The list of DevAddrs can be emty.
+
+#### `return_filters`
+
+This returns the filterlist. This can be used to get the filterlist, or can be
+used combined with one of the above commands to confirm that the filterlist
+has been updated.
+
 ## License
 
 ChirpStack MQTT Forwarder is distributed under the MIT license. See also
