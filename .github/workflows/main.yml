@@ -82,7 +82,7 @@ jobs:
       -
         name: Upload binaries to MinIO
         run: |
-          aws --endpoint-url https://minio.awarebuildings.com s3 sync dist s3://chirpstack/chirpstack-mqtt-forwarder --acl public-read
+          aws --endpoint-url https://minioapi.awarebuildings.com s3 sync dist s3://chirpstack/chirpstack-mqtt-forwarder --acl public-read
         env:
             AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY }}
             AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY }}
